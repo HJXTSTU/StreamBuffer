@@ -113,29 +113,60 @@ type StreamBuffer interface {
 	ReadFloat64() float64
 	WriteFloat64(float64)
 
+	ReadLine()string
+	WriteLine(str string)
+
+	ReadNBytes(n int) []byte
+	WriteNBytes(b []byte,n int)
+
 	Write(p []byte) (n int, err error)
 
-	Close()
+	Renew()
 
 	Reset()
 
 	Len() int
 
 	Empty() bool
+
+	Undo()
+
+
 }
+
+type UndoOffset int
 
 type stream struct {
 	buf []byte
 	off int
 	cur int
+
+	undoOffset UndoOffset
+}
+
+func (this *stream)ReadLine()string{
+	endl := this.cur
+	for this.buf[endl]!='\n'&&endl<this.off{
+		endl++
+	}
+	start:=this.cur
+	this.cur=endl+1;
+	return string(this.buf[start:endl])
+}
+
+func (this *stream)WriteLine(str string){
+	bytes := []byte(str)
+	this.Append(bytes)
+	this.WriteByte('\n')
 }
 
 func (this *stream) Append(p []byte) {
 	this.buf = append(this.buf, p...)
+	this.off += len(p)
 }
 
 func (this *stream) Bytes() []byte {
-	return this.buf
+	return this.buf[this.cur:this.off]
 }
 
 func (this *stream) Len() int {
@@ -149,16 +180,13 @@ func (this *stream) Empty() bool {
 func (this *stream) ReadByte() byte {
 	res := this.buf[this.cur]
 	this.cur++
+	this.undoOffset++
 	return res
 }
-func (this *stream)WriteByte(b byte){
-	this.buf = append(this.buf,b)
+func (this *stream) WriteByte(b byte) {
+	this.buf = append(this.buf, b)
 	this.off++
 }
-
-
-
-
 
 func (this *stream) ReadInt() int {
 	if this.Empty() {
@@ -167,6 +195,7 @@ func (this *stream) ReadInt() int {
 	p := this.buf[this.cur:this.cur+4]
 	i := bytesToInt(p)
 	this.cur += 4
+	this.undoOffset += 4
 	return i
 }
 
@@ -182,6 +211,7 @@ func (this *stream) ReadFloat32() float32 {
 	p := this.buf[this.cur:this.cur+4]
 	f := bytesToFloat32(p)
 	this.cur += 4
+	this.undoOffset += 4
 	return f
 }
 
@@ -197,6 +227,7 @@ func (this *stream) ReadFloat64() float64 {
 	p := this.buf[this.cur:this.cur+8]
 	f := bytesToFloat64(p)
 	this.cur += 8
+	this.undoOffset += 8
 	return f
 }
 
@@ -212,17 +243,42 @@ func (this *stream) Write(p []byte) (n int, err error) {
 	return l, nil
 }
 
-func (this *stream) Close() {
+func (this *stream) Renew() {
 	this.buf = make([]byte, 0)
 	this.cur = 0
 	this.off = 0
+	this.undoOffset = 0;
 }
 
+func (this *stream) Undo() {
+	this.cur -= int(this.undoOffset)
+}
+
+func (this *stream) ReadNBytes(n int) []byte {
+	cur := this.cur
+	this.cur += n
+	if this.cur == this.off {
+		defer this.Renew()
+	}
+	res := make([]byte,n)
+	copy(res,this.buf[cur:cur+n])
+	return res
+}
+
+func (this *stream)WriteNBytes(b []byte,n int){
+	if len(b)<n {
+		n = len(b)
+	}
+	this.Append(b[:n])
+}
+
+//	重置stream的cur下标
 func (this *stream) Reset() {
 	this.cur = 0
+	this.undoOffset = 0;
 	//this.off = 0
 }
 
-func NewStreamBuffer() StreamBuffer{
-	return &stream{make([]byte,0),0,0}
+func NewStreamBuffer() StreamBuffer {
+	return &stream{make([]byte, 0), 0, 0, 0}
 }
